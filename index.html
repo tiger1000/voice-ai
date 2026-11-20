@@ -3,26 +3,30 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>הקלטה</title>
+<title>הקלטה לגיליון</title>
 <style>
-  body{font-family:Arial,sans-serif;margin:0;padding:24px;text-align:center;background:#fafafa;color:#222}
-  #btn{font-size:22px;padding:22px 34px;border:0;border-radius:14px;background:#c62828;color:#fff;width:100%;max-width:340px;cursor:pointer}
+  body{font-family:Arial,sans-serif;margin:0;padding:18px;text-align:center;background:#fafafa;color:#222}
+  #btn{font-size:22px;padding:20px 30px;border:0;border-radius:14px;background:#c62828;color:#fff;width:100%;max-width:340px;cursor:pointer}
   #btn.idle{background:#1565c0} #btn:disabled{background:#999;cursor:default}
-  #st{margin:18px 0;font-size:18px}
-  .box{text-align:right;background:#fff;border:1px solid #ddd;border-radius:10px;padding:12px;margin:12px auto;max-width:560px;white-space:pre-wrap}
-  h4{margin:0 0 6px} #row{font-size:14px;color:#666}
+  #st{margin:14px 0;font-size:17px} #cell{font-size:15px;color:#555}
+  .hint{font-size:13px;color:#777;margin-top:6px}
+  .box{text-align:right;background:#fff;border:1px solid #ddd;border-radius:10px;padding:10px;margin:10px auto;max-width:560px;white-space:pre-wrap;font-size:14px}
+  h4{margin:0 0 4px}
 </style>
 </head>
 <body>
-<div id="row"></div>
+<div id="cell"></div>
 <div id="st">מוכן</div>
 <button id="btn" class="idle">התחל הקלטה</button>
+<div class="hint">אפשר להתחיל במשפט "תא B4" כדי לבחור תא אחר.</div>
 <div id="out"></div>
 <script>
 {
-  // Settings come from the link in the sheet: ?row=N#k=SECRET&api=URL
+  // Link from the sheet: ?sheet=NAME&cell=A1&row=N#k=SECRET&api=URL
   const qs = new URLSearchParams(location.search);
   const hs = new URLSearchParams(location.hash.slice(1));
+  const SHEET = qs.get('sheet') || '';
+  const CELL = qs.get('cell') || '';
   const ROW = Number(qs.get('row') || 0);
   let K = hs.get('k'), API = hs.get('api');
   try {
@@ -32,13 +36,13 @@
   if (location.hash) history.replaceState(null, '', location.pathname + location.search);
 
   const st = document.getElementById('st'), btn = document.getElementById('btn'), out = document.getElementById('out');
-  document.getElementById('row').textContent = ROW ? 'שורה ' + ROW : 'שורה פנויה הבאה';
+  document.getElementById('cell').textContent = CELL ? 'תא מסומן: ' + CELL : (ROW ? 'שורה ' + ROW : '');
   let rec, chunks = [], stream, t0, timer;
 
   function idle(label) { btn.textContent = label; btn.className = 'idle'; btn.disabled = false; btn.onclick = start; }
 
-  if (!K || !API) { st.textContent = 'פתח את הדף מכפתור "הקלט" בגיליון.'; btn.disabled = true; }
-  else btn.onclick = start;
+  if (!K || !API) { st.textContent = 'פתח את המקליט מהתפריט בגיליון.'; btn.disabled = true; }
+  else { btn.onclick = start; start(); }
 
   function start() {
     out.innerHTML = '';
@@ -53,8 +57,8 @@
       timer = setInterval(function () { st.textContent = 'מקליט... ' + Math.round((Date.now() - t0) / 1000) + ' שניות'; }, 500);
       btn.textContent = 'עצור ושלח'; btn.className = ''; btn.disabled = false; btn.onclick = stop;
     }).catch(function (err) {
-      st.textContent = 'אין גישה למיקרופון: ' + err.name;
-      idle('נסה שוב');
+      st.textContent = 'לחץ כדי להקליט';
+      idle('התחל הקלטה');
     });
   }
 
@@ -70,13 +74,14 @@
       return fetch(API, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ k: K, row: ROW, audio: b64, mime: 'audio/wav' })
+        body: JSON.stringify({ k: K, sheet: SHEET, cell: CELL, row: ROW, audio: b64, mime: 'audio/wav' })
       }).then(function (r) { return r.json(); });
     }).then(function (r) {
       if (!r.ok) throw new Error(r.error);
-      st.textContent = 'נשמר בשורה ' + r.row + '. אפשר לסגור.';
-      add('תמלול', r.transcript); add('תשובה', r.answer);
-      idle('הקלט שוב (דורס את השורה)');
+      st.textContent = 'נכתב בתא ' + r.cell + '. החלון ייסגר.';
+      add('תמלול', r.transcript); add('תשובת AI', r.answer);
+      idle('הקלט שוב');
+      setTimeout(function () { window.close(); }, 4000);
     }).catch(function (e) {
       st.textContent = 'שגיאה: ' + e.message;
       idle('נסה שוב');
@@ -86,10 +91,10 @@
   function add(title, text) {
     const d = document.createElement('div'); d.className = 'box';
     const h = document.createElement('h4'); h.textContent = title; d.appendChild(h);
-    d.appendChild(document.createTextNode(text)); out.appendChild(d);
+    d.appendChild(document.createTextNode(text || '')); out.appendChild(d);
   }
 
-  // Convert the recording to 16 kHz mono WAV (works on all browsers and phones).
+  // Convert the recording to 16 kHz mono WAV.
   function toWav(blob) {
     const AC = window.AudioContext || window.webkitAudioContext;
     return blob.arrayBuffer().then(function (buf) {
