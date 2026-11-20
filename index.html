@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>הקלטה</title>
+<style>
+  body{font-family:Arial,sans-serif;margin:0;padding:24px;text-align:center;background:#fafafa;color:#222}
+  #btn{font-size:22px;padding:22px 34px;border:0;border-radius:14px;background:#c62828;color:#fff;width:100%;max-width:340px;cursor:pointer}
+  #btn.idle{background:#1565c0} #btn:disabled{background:#999;cursor:default}
+  #st{margin:18px 0;font-size:18px}
+  .box{text-align:right;background:#fff;border:1px solid #ddd;border-radius:10px;padding:12px;margin:12px auto;max-width:560px;white-space:pre-wrap}
+  h4{margin:0 0 6px} #row{font-size:14px;color:#666}
+</style>
+</head>
+<body>
+<div id="row"></div>
+<div id="st">מוכן</div>
+<button id="btn" class="idle">התחל הקלטה</button>
+<div id="out"></div>
+<script>
+{
+  // Settings come from the link in the sheet: ?row=N#k=SECRET&api=URL
+  const qs = new URLSearchParams(location.search);
+  const hs = new URLSearchParams(location.hash.slice(1));
+  const ROW = Number(qs.get('row') || 0);
+  let K = hs.get('k'), API = hs.get('api');
+  try {
+    if (K && API) { localStorage.setItem('va_k', K); localStorage.setItem('va_api', API); }
+    else { K = localStorage.getItem('va_k'); API = localStorage.getItem('va_api'); }
+  } catch (e) {}
+  if (location.hash) history.replaceState(null, '', location.pathname + location.search);
+
+  const st = document.getElementById('st'), btn = document.getElementById('btn'), out = document.getElementById('out');
+  document.getElementById('row').textContent = ROW ? 'שורה ' + ROW : 'שורה פנויה הבאה';
+  let rec, chunks = [], stream, t0, timer;
+
+  function idle(label) { btn.textContent = label; btn.className = 'idle'; btn.disabled = false; btn.onclick = start; }
+
+  if (!K || !API) { st.textContent = 'פתח את הדף מכפתור "הקלט" בגיליון.'; btn.disabled = true; }
+  else btn.onclick = start;
+
+  function start() {
+    out.innerHTML = '';
+    navigator.mediaDevices.getUserMedia({ audio: true }).then(function (s) {
+      stream = s; chunks = [];
+      rec = new MediaRecorder(s);
+      rec.ondataavailable = function (e) { if (e.data.size) chunks.push(e.data); };
+      rec.onstop = send;
+      rec.start();
+      t0 = Date.now();
+      st.textContent = 'מקליט... 0 שניות';
+      timer = setInterval(function () { st.textContent = 'מקליט... ' + Math.round((Date.now() - t0) / 1000) + ' שניות'; }, 500);
+      btn.textContent = 'עצור ושלח'; btn.className = ''; btn.disabled = false; btn.onclick = stop;
+    }).catch(function (err) {
+      st.textContent = 'אין גישה למיקרופון: ' + err.name;
+      idle('נסה שוב');
+    });
+  }
+
+  function stop() {
+    clearInterval(timer); btn.disabled = true; st.textContent = 'מעבד...';
+    rec.stop(); stream.getTracks().forEach(function (t) { t.stop(); });
+  }
+
+  function send() {
+    const blob = new Blob(chunks, { type: rec.mimeType });
+    toWav(blob).then(function (b64) {
+      st.textContent = 'שולח ל-AI...';
+      return fetch(API, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ k: K, row: ROW, audio: b64, mime: 'audio/wav' })
+      }).then(function (r) { return r.json(); });
+    }).then(function (r) {
+      if (!r.ok) throw new Error(r.error);
+      st.textContent = 'נשמר בשורה ' + r.row + '. אפשר לסגור.';
+      add('תמלול', r.transcript); add('תשובה', r.answer);
+      idle('הקלט שוב (דורס את השורה)');
+    }).catch(function (e) {
+      st.textContent = 'שגיאה: ' + e.message;
+      idle('נסה שוב');
+    });
+  }
+
+  function add(title, text) {
+    const d = document.createElement('div'); d.className = 'box';
+    const h = document.createElement('h4'); h.textContent = title; d.appendChild(h);
+    d.appendChild(document.createTextNode(text)); out.appendChild(d);
+  }
+
+  // Convert the recording to 16 kHz mono WAV (works on all browsers and phones).
+  function toWav(blob) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    return blob.arrayBuffer().then(function (buf) {
+      const ac = new AC();
+      return new Promise(function (res, rej) { ac.decodeAudioData(buf, res, rej); }).then(function (a) {
+        ac.close();
+        const rate = 16000, len = Math.ceil(a.duration * rate);
+        const off = new (window.OfflineAudioContext || window.webkitOfflineAudioContext)(1, len, rate);
+        const src = off.createBufferSource(); src.buffer = a; src.connect(off.destination); src.start();
+        return off.startRendering();
+      }).then(function (r) {
+        const pcm = r.getChannelData(0), n = pcm.length, b = new ArrayBuffer(44 + n * 2), v = new DataView(b);
+        function w(o, s) { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); }
+        w(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); w(8, 'WAVE'); w(12, 'fmt '); v.setUint32(16, 16, true);
+        v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, 16000, true); v.setUint32(28, 32000, true);
+        v.setUint16(32, 2, true); v.setUint16(34, 16, true); w(36, 'data'); v.setUint32(40, n * 2, true);
+        for (let i = 0; i < n; i++) { const x = Math.max(-1, Math.min(1, pcm[i])); v.setInt16(44 + i * 2, x < 0 ? x * 0x8000 : x * 0x7FFF, true); }
+        const u = new Uint8Array(b); let s = ''; const C = 0x8000;
+        for (let j = 0; j < u.length; j += C) s += String.fromCharCode.apply(null, u.subarray(j, j + C));
+        return btoa(s);
+      });
+    });
+  }
+}
+</script>
+</body>
+</html>
